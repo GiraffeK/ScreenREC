@@ -50,6 +50,41 @@ def detect_available_hw_encoders(ffmpeg_exe: str = None) -> list:
 
     return available
 
+def get_system_loopback_mic():
+    """Universally resolves active Windows default output device loopback (Bluetooth, USB, Speaker, HDMI)."""
+    try:
+        spk = sc.default_speaker()
+        return sc.get_microphone(spk.name, include_loopback=True)
+    except Exception:
+        pass
+
+    # Fallback: search all available loopback microphones on any output device
+    try:
+        for m in sc.all_microphones(include_loopback=True):
+            if getattr(m, 'isloopback', False):
+                return m
+    except Exception:
+        pass
+
+    return None
+
+def get_physical_mic():
+    """Universally resolves active Windows default physical microphone."""
+    try:
+        return sc.default_microphone()
+    except Exception:
+        pass
+
+    # Fallback: search all physical non-loopback microphones
+    try:
+        for m in sc.all_microphones(include_loopback=True):
+            if not getattr(m, 'isloopback', False):
+                return m
+    except Exception:
+        pass
+
+    return None
+
 class AudioCaptureThread(threading.Thread):
     def __init__(self, sample_rate=44100, source="system"):
         super().__init__()
@@ -73,11 +108,19 @@ class AudioCaptureThread(threading.Thread):
             return
 
         try:
-            if self.source == "system":
-                # Dynamically fetch Windows currently active default output device (Bluetooth / USB / Speaker)
-                spk = sc.default_speaker()
-                mic = sc.get_microphone(spk.name, include_loopback=True)
-                with mic.recorder(samplerate=self.sample_rate, channels=2) as rec:
+            sys_loopback_mic = get_system_loopback_mic() if self.source in ("system", "mix") else None
+            physical_mic = get_physical_mic() if self.source in ("mic", "mix") else None
+
+            # Fallback handling
+            if self.source == "system" and not sys_loopback_mic:
+                sys_loopback_mic = physical_mic
+
+            if self.source == "mic" and not physical_mic:
+                physical_mic = sys_loopback_mic
+
+            # Pure System Loopback capture
+            if sys_loopback_mic and not physical_mic:
+                with sys_loopback_mic.recorder(samplerate=self.sample_rate, channels=2) as rec:
                     while self.is_running:
                         if not self.is_paused:
                             float_data = rec.record(numframes=1024)
@@ -86,9 +129,9 @@ class AudioCaptureThread(threading.Thread):
                         else:
                             time.sleep(0.05)
 
-            elif self.source == "mic":
-                mic = sc.default_microphone()
-                with mic.recorder(samplerate=self.sample_rate, channels=2) as rec:
+            # Pure Physical Mic capture
+            elif physical_mic and not sys_loopback_mic:
+                with physical_mic.recorder(samplerate=self.sample_rate, channels=2) as rec:
                     while self.is_running:
                         if not self.is_paused:
                             float_data = rec.record(numframes=1024)
@@ -97,13 +140,10 @@ class AudioCaptureThread(threading.Thread):
                         else:
                             time.sleep(0.05)
 
-            elif self.source == "mix":
-                spk = sc.default_speaker()
-                sys_loopback = sc.get_microphone(spk.name, include_loopback=True)
-                mic = sc.default_microphone()
-                
-                with sys_loopback.recorder(samplerate=self.sample_rate, channels=2) as rec_sys, \
-                     mic.recorder(samplerate=self.sample_rate, channels=2) as rec_mic:
+            # Simultaneous Mixed capture
+            elif sys_loopback_mic and physical_mic:
+                with sys_loopback_mic.recorder(samplerate=self.sample_rate, channels=2) as rec_sys, \
+                     physical_mic.recorder(samplerate=self.sample_rate, channels=2) as rec_mic:
                     while self.is_running:
                         if not self.is_paused:
                             data_sys = rec_sys.record(numframes=1024)
@@ -227,7 +267,7 @@ class ScreenRecorderThread(QThread):
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
 
-            # Setup Audio thread using soundcard for active System Audio Loopback / Mic
+            # Setup Audio thread with universal fallback resolution
             audio_enabled = self.config.get("audio_enabled", True)
             audio_source = self.config.get("audio_source", "system")
             sample_rate = int(self.config.get("audio_sample_rate", 44100))
