@@ -21,7 +21,8 @@ DEFAULT_CONFIG = {
     "region_y": 100,
     "region_width": 1280,
     "region_height": 720,
-    "auto_open_editor": True
+    "auto_open_editor": True,
+    "auto_minimize_on_rec": True
 }
 
 class ConfigManager:

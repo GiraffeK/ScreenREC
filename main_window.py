@@ -237,6 +237,11 @@ class MainWindow(QMainWindow):
         layout.addLayout(btn_layout)
 
         # Options
+        self.chk_auto_minimize = QCheckBox("開始錄影時自動最小化視窗 (Minimize window on REC)")
+        self.chk_auto_minimize.setChecked(True)
+        self.chk_auto_minimize.toggled.connect(lambda v: self.config.set("auto_minimize_on_rec", v))
+        layout.addWidget(self.chk_auto_minimize)
+
         self.chk_auto_editor = QCheckBox("錄影結束後自動進入影片掐頭去尾編輯器 (Auto Open Trimmer)")
         self.chk_auto_editor.setChecked(True)
         self.chk_auto_editor.toggled.connect(lambda v: self.config.set("auto_open_editor", v))
@@ -310,7 +315,6 @@ class MainWindow(QMainWindow):
         self.chk_audio_enable.setChecked(True)
         a_layout.addWidget(self.chk_audio_enable)
 
-        # Audio Source Selector (WASAPI System Audio Loopback / Mic / Mix)
         source_layout = QHBoxLayout()
         self.combo_audio_source = QComboBox()
         self.combo_audio_source.addItem("🖥 系統聲音 (自動跟隨 Windows 當前播放裝置: 藍牙/USB/喇叭)", userData="system")
@@ -379,7 +383,6 @@ class MainWindow(QMainWindow):
         self.combo_mode.setCurrentIndex(0 if mode == "fullscreen" else 1)
         self.on_mode_changed(self.combo_mode.currentIndex())
 
-        # Select saved codec in combo box
         saved_vcodec = self.config.get("video_codec", "libx264")
         found_idx = 0
         for i in range(self.combo_vcodec.count()):
@@ -417,9 +420,10 @@ class MainWindow(QMainWindow):
         srate = self.config.get("audio_sample_rate", 44100)
         self.combo_sample_rate.setCurrentIndex(0 if srate == 44100 else 1)
 
-        # Path
+        # Path & Options
         self.txt_save_dir.setText(self.config.get("save_dir"))
         self.txt_filename_pattern.setText(self.config.get("filename_pattern"))
+        self.chk_auto_minimize.setChecked(bool(self.config.get("auto_minimize_on_rec", True)))
         self.chk_auto_editor.setChecked(bool(self.config.get("auto_open_editor", True)))
 
         self.update_region_info_label()
@@ -511,6 +515,10 @@ class MainWindow(QMainWindow):
         self.recorder_thread.recording_error.connect(self.on_recording_error)
         self.recorder_thread.start()
 
+        # Minimize main window automatically if option is checked
+        if self.config.get("auto_minimize_on_rec", True):
+            self.showMinimized()
+
     def toggle_pause(self):
         if not self.recorder_thread:
             return
@@ -540,6 +548,10 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText(f"🔴 錄影中 {hrs:02d}:{mins:02d}:{secs:02d}")
 
     def on_recording_stopped(self, filepath):
+        # Restore window if minimized
+        self.showNormal()
+        self.activateWindow()
+
         self.btn_start.setEnabled(True)
         self.btn_pause.setEnabled(False)
         self.btn_pause.setText("⏸ 暫停")
@@ -561,6 +573,10 @@ class MainWindow(QMainWindow):
             )
 
     def on_recording_error(self, err_msg):
+        # Restore window if minimized
+        self.showNormal()
+        self.activateWindow()
+
         self.btn_start.setEnabled(True)
         self.btn_pause.setEnabled(False)
         self.btn_stop.setEnabled(False)
