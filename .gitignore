@@ -3,6 +3,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# PyInstaller Build Artifacts
+build/
+dist/
+*.spec
+
 # Configuration & Recordings
 config.json
 *.mp4
