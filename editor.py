@@ -65,30 +65,30 @@ class VideoEditorWidget(QWidget):
 
     def init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
 
         # 1. Top File Selection Bar
         file_bar = QHBoxLayout()
         self.btn_open_file = QPushButton("📁 開啟影片檔案")
-        self.btn_open_file.setFixedHeight(36)
+        self.btn_open_file.setFixedHeight(26)
         self.lbl_file_path = QLabel("尚未選擇影片檔")
-        self.lbl_file_path.setStyleSheet("color: #AAA; font-style: italic;")
+        self.lbl_file_path.setStyleSheet("color: #B0BEC5; font-style: italic; font-size: 11px;")
         file_bar.addWidget(self.btn_open_file)
         file_bar.addWidget(self.lbl_file_path, 1)
         layout.addLayout(file_bar)
 
         # 2. Video Player Display Area
         self.video_widget = QVideoWidget()
-        self.video_widget.setStyleSheet("background-color: #000; border-radius: 8px;")
-        self.video_widget.setMinimumHeight(100)
+        self.video_widget.setStyleSheet("background-color: #000; border-radius: 4px;")
+        self.video_widget.setMinimumHeight(80)
         self.player.setVideoOutput(self.video_widget)
         layout.addWidget(self.video_widget, 1)
 
         # 3. Playback Seek Bar & Time Display
         seek_layout = QHBoxLayout()
         self.btn_play_pause = QPushButton("▶ 播放")
-        self.btn_play_pause.setFixedWidth(80)
+        self.btn_play_pause.setFixedSize(60, 26)
         self.btn_play_pause.setEnabled(False)
 
         self.slider_seek = QSlider(Qt.Orientation.Horizontal)
@@ -96,7 +96,8 @@ class VideoEditorWidget(QWidget):
         self.slider_seek.setEnabled(False)
 
         self.lbl_time = QLabel("00:00:00 / 00:00:00")
-        self.lbl_time.setFont(QFont("Consolas", 10))
+        self.lbl_time.setFont(QFont("Consolas", 9))
+        self.lbl_time.setStyleSheet("color: #FFFFFF;")
 
         seek_layout.addWidget(self.btn_play_pause)
         seek_layout.addWidget(self.slider_seek, 1)
@@ -104,22 +105,28 @@ class VideoEditorWidget(QWidget):
         layout.addLayout(seek_layout)
 
         # 4. Trimming Control Group Box (掐頭去尾編輯器)
-        trim_group = QGroupBox("✂ 掐頭去尾區段選擇")
+        trim_group = QGroupBox("✂ 掐頭去尾區段")
         trim_layout = QVBoxLayout(trim_group)
+        trim_layout.setContentsMargins(4, 4, 4, 4)
+        trim_layout.setSpacing(3)
 
         trim_btn_layout = QHBoxLayout()
-        self.btn_set_start = QPushButton("[ 設為剪裁起點 (Start)")
+        self.btn_set_start = QPushButton("[ 剪裁起點")
+        self.btn_set_start.setFixedHeight(26)
         self.btn_set_start.setStyleSheet("background-color: #1b5e20; color: white;")
         self.btn_set_start.setEnabled(False)
 
-        self.btn_set_end = QPushButton("] 設為剪裁終點 (End)")
+        self.btn_set_end = QPushButton("] 剪裁終點")
+        self.btn_set_end.setFixedHeight(26)
         self.btn_set_end.setStyleSheet("background-color: #b71c1c; color: white;")
         self.btn_set_end.setEnabled(False)
 
-        self.btn_reset_trim = QPushButton("🔄 重置範圍")
+        self.btn_reset_trim = QPushButton("🔄 重置")
+        self.btn_reset_trim.setFixedHeight(26)
         self.btn_reset_trim.setEnabled(False)
 
-        self.btn_preview_trim = QPushButton("👁 預覽剪裁區段")
+        self.btn_preview_trim = QPushButton("👁 預覽區段")
+        self.btn_preview_trim.setFixedHeight(26)
         self.btn_preview_trim.setEnabled(False)
 
         trim_btn_layout.addWidget(self.btn_set_start)
@@ -129,8 +136,8 @@ class VideoEditorWidget(QWidget):
         trim_layout.addLayout(trim_btn_layout)
 
         # Trim Status Label
-        self.lbl_trim_info = QLabel("尚未設定剪裁範圍 (預設保留整段影片)")
-        self.lbl_trim_info.setStyleSheet("color: #00E676; font-weight: bold;")
+        self.lbl_trim_info = QLabel("尚未設定剪裁範圍 (預設整段)")
+        self.lbl_trim_info.setStyleSheet("color: #00E676; font-weight: bold; font-size: 11px;")
         self.lbl_trim_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
         trim_layout.addWidget(self.lbl_trim_info)
 
@@ -141,26 +148,26 @@ class VideoEditorWidget(QWidget):
         
         self.combo_export_mode = QComboBox()
         self.combo_export_mode.addItems([
-            "🎯 精確極速裁切 (Frame-Accurate, 推薦，~0.2秒)",
-            "⚡ 零耗損串流拷貝 (Stream Copy, 依關鍵影格)",
-            "💻 高品質自訂編碼 (Re-encode with Settings)"
+            "🎯 精確極速裁切 (推薦)",
+            "⚡ 串流拷貝 (關鍵影格)",
+            "💻 自訂重新編碼"
         ])
-        self.combo_export_mode.setFixedHeight(38)
+        self.combo_export_mode.setFixedHeight(28)
 
-        self.btn_export = QPushButton("⚡ 立即極速匯出 (免選路徑，1秒完成)")
-        self.btn_export.setFixedHeight(38)
-        self.btn_export.setStyleSheet("background-color: #2E7D32; color: white; font-weight: bold; font-size: 13px; border-radius: 6px;")
+        self.btn_export = QPushButton("⚡ 極速匯出")
+        self.btn_export.setFixedHeight(28)
+        self.btn_export.setStyleSheet("background-color: #2E7D32; color: white; font-weight: bold; font-size: 11px; border-radius: 4px;")
         self.btn_export.setEnabled(False)
 
-        self.btn_export_as = QPushButton("📁 另存新檔...")
-        self.btn_export_as.setFixedHeight(38)
-        self.btn_export_as.setStyleSheet("background-color: #0288D1; color: white; font-weight: bold; font-size: 13px; border-radius: 6px;")
+        self.btn_export_as = QPushButton("📁 另存...")
+        self.btn_export_as.setFixedHeight(28)
+        self.btn_export_as.setStyleSheet("background-color: #0288D1; color: white; font-weight: bold; font-size: 11px; border-radius: 4px;")
         self.btn_export_as.setEnabled(False)
 
-        export_layout.addWidget(QLabel("導出模式:"))
-        export_layout.addWidget(self.combo_export_mode)
-        export_layout.addWidget(self.btn_export, 2)
-        export_layout.addWidget(self.btn_export_as, 1)
+        export_layout.addWidget(QLabel("導出:"))
+        export_layout.addWidget(self.combo_export_mode, 1)
+        export_layout.addWidget(self.btn_export)
+        export_layout.addWidget(self.btn_export_as)
         layout.addLayout(export_layout)
 
     def setup_connections(self):

@@ -1,5 +1,4 @@
 當我請AI Agent寫程式時，也請附上此附件，做為AI Agent的行動準則，以下請AI Agent遵守：
-（注意：使用者目前唯一使用之 Coding Agent 為 Zoo Code，已不再使用 Roo Code，所有工具調優與說明皆以此為準）
 
 1. 請AI Agent在接受user initial prompt之後，也要一併讀此規範，並在每次結束AI Agent任務時，告訴使用者你有使用此準則，並證明之，讓使用者確定你沒忘了此準則。在回覆末尾請一律附上標準履約查核標籤。
 2. AI Agent 必須從頭到尾記錄程式開發的每一個過程，包含接收到user prompt、AI的理解、想法和解法的過程都要寫到development-log.md markdown file。當日誌過長時依輪替機制歸檔至 docs/logs/。
