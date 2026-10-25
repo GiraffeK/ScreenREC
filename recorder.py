@@ -237,7 +237,9 @@ class ScreenRecorderThread(QThread):
                 "-r", str(fps),
                 "-i", "-", # Stdin input
                 "-c:v", v_codec,
-                "-pix_fmt", "yuv420p"
+                "-pix_fmt", "yuv420p",
+                "-g", str(fps),            # Emit keyframe every 1s for accurate trimming
+                "-keyint_min", str(fps)
             ]
 
             # Hardware acceleration encoder flags tuning

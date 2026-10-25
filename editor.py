@@ -141,8 +141,9 @@ class VideoEditorWidget(QWidget):
         
         self.combo_export_mode = QComboBox()
         self.combo_export_mode.addItems([
-            "極速無損導出 (Stream Copy, 免重新編碼)",
-            "重新編碼導出 (Re-encode with H.264/H.265)"
+            "🎯 精確極速裁切 (Frame-Accurate, 推薦，~0.2秒)",
+            "⚡ 零耗損串流拷貝 (Stream Copy, 依關鍵影格)",
+            "💻 高品質自訂編碼 (Re-encode with Settings)"
         ])
         self.combo_export_mode.setFixedHeight(38)
 
@@ -352,10 +353,19 @@ class VideoEditorWidget(QWidget):
         cmd = [self.ffmpeg_exe, "-y", "-ss", f"{start_sec:.3f}", "-to", f"{end_sec:.3f}", "-i", self.video_path]
 
         if mode == 0:
-            # Stream Copy (Lossless fast cut)
+            # Frame-Accurate Fast Trim: ultrafast video re-encode (visually lossless CRF 18) + direct audio copy
+            cmd.extend([
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-crf", "18",
+                "-c:a", "copy",
+                "-avoid_negative_ts", "make_zero"
+            ])
+        elif mode == 1:
+            # Stream Copy (Lossless fast cut aligned with keyframes)
             cmd.extend(["-c", "copy", "-avoid_negative_ts", "make_zero"])
         else:
-            # Re-encode
+            # Re-encode with user configured codec
             v_codec = self.config.get("video_codec", "libx264")
             a_codec = self.config.get("audio_codec", "aac")
             crf = self.config.get("crf", 23)

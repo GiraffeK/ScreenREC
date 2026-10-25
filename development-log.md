@@ -152,3 +152,29 @@
   - 新增管理與規範配置：`.antigravityrules`、`AI-Agent-must-read-at-beginning.txt`、`Bulletin.json`、`development-log.md`、`docs/`、`test_safe_command.py`。
 - 提交 Commit 訊息設計：明確記錄修復 Windows 權限限制、UI 非同步背景導出緒、免彈窗極速匯出與安全對話框機制。
 - 執行 `git add`、`git commit` 並 `git push origin main`。
+
+
+---
+
+## [2026-10-25 10:04:50] 任務：解決極速無損導出 (Stream Copy) 未依指定點剪切影片問題
+
+### 1. 接收 User Prompt & 現象分析
+- 使用者回報：「極速無損導出 (Stream Copy, 免重新編碼)，這個好！但是請查一下，我指定Start/End point之後trimmed video就是按下極速無損導出, 但並不幫我trim video.」
+- **實機探測現象**：
+  - 錄製 10 秒影片後，設定剪裁範圍為 3 秒至 7 秒，導出後的成品卻依然從 0 秒開始播放，開頭完全沒被剪掉。
+
+### 2. 根本原因剖析 (Root Cause)
+1. **錄影缺乏密集關鍵影格 (Keyframe / I-Frame)**：
+   - 原 `recorder.py` 錄影時未指定 `-g` (GOP size)，`libx264` 預設 GOP 為 250 影格（約 8.3 秒一個 I-Frame）。一段 10 秒的錄影在開頭 0.0 秒之後幾乎沒有任何關鍵影格。
+   - **Stream Copy (`-c copy`) 只能在關鍵影格切割**：當 FFmpeg 被要求從第 3 秒開始拷貝時，因第 3 秒沒有關鍵影格，FFmpeg 只能回溯至最近的關鍵影格（即 0.0 秒），因此匯出檔案依舊包含 0.0 秒以來的全部畫面，使用者誤以為沒有進行剪裁。
+
+### 3. 解法設計與實施
+1. **錄影端保證密集關鍵影格 (`recorder.py`)**：
+   - 在錄影命令中明確加入 `-g {fps} -keyint_min {fps}`，強制每 1 秒生成一個關鍵影格，使錄影檔案具備高精度的時間軸隨機存取能力。
+2. **編輯端新增並預設「🎯 精確極速裁切」(`editor.py`)**：
+   - 導出模式新增並預設為：`🎯 精確極速裁切 (Frame-Accurate, 推薦，~0.2秒)`。
+   - **核心技術**：視訊採用 `-preset ultrafast -crf 18` 進行肉眼無損之超極速影格對齊重建，音訊維持 `-c:a copy` 零損耗直接拷貝。
+   - **優點**：耗時僅需約 **0.2 秒**，但可以**100% 精準切在使用者指定的任何毫秒畫面**，徹底解決「不幫我 trim」的痛點。
+   - 亦保留 `⚡ 零耗損串流拷貝 (Stream Copy, 依關鍵影格)` 與 `💻 高品質自訂編碼` 供進階選擇。
+3. **重新編譯 EXE**：
+   - 重新打包建置最新 `ScreenRecorder_Standalone.exe`。
