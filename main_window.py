@@ -495,11 +495,20 @@ class MainWindow(QMainWindow):
             self.lbl_region_info.setText(f"座標區域: 🎯 X:{rx}, Y:{ry} | 寬:{rw}px, 高:{rh}px")
 
     def browse_save_directory(self):
-        dir_path = QFileDialog.getExistingDirectory(self, "選擇預設儲存目錄", self.txt_save_dir.text())
+        dir_path = QFileDialog.getExistingDirectory(
+            self, "選擇預設儲存目錄", self.txt_save_dir.text(),
+            options=QFileDialog.Option.DontUseNativeDialog
+        )
         if dir_path:
             self.txt_save_dir.setText(dir_path)
 
     def start_recording(self):
+        try:
+            self.config.generate_filepath()
+        except Exception as e:
+            QMessageBox.critical(self, "目錄錯誤", f"無法存取錄影儲存目錄:\n{e}\n請至設定分頁更換儲存目錄。")
+            return
+
         self.btn_start.setEnabled(False)
         self.btn_pause.setEnabled(True)
         self.btn_stop.setEnabled(True)
@@ -533,12 +542,20 @@ class MainWindow(QMainWindow):
             self.lbl_status.setStyleSheet("color: #FFC107; margin: 15px;")
 
     def stop_recording(self):
-        if self.recorder_thread:
-            self.lbl_status.setText("⏳ 正在停止錄影並合併影音檔案，請稍候...")
-            self.lbl_status.setStyleSheet("color: #FF9800; margin: 15px;")
+        if not self.recorder_thread or not self.recorder_thread.isRunning():
+            self.lbl_status.setText("就緒 (Ready)")
+            self.lbl_status.setStyleSheet("color: #4FC3F7; margin: 15px;")
+            self.btn_start.setEnabled(True)
             self.btn_pause.setEnabled(False)
             self.btn_stop.setEnabled(False)
-            self.recorder_thread.stop()
+            self.combo_mode.setEnabled(True)
+            return
+
+        self.lbl_status.setText("⏳ 正在停止錄影並合併影音檔案，請稍候...")
+        self.lbl_status.setStyleSheet("color: #FF9800; margin: 15px;")
+        self.btn_pause.setEnabled(False)
+        self.btn_stop.setEnabled(False)
+        self.recorder_thread.stop()
 
     def on_duration_update(self, seconds):
         mins = seconds // 60

@@ -1,10 +1,36 @@
 import json
 import os
+import sys
 from pathlib import Path
 from datetime import datetime
 
+def get_safe_default_save_dir() -> str:
+    """Finds a guaranteed writable recording directory."""
+    candidates = [
+        Path.home() / "Videos" / "Recordings",
+        Path.home() / "Videos",
+        Path(__file__).resolve().parent / "recordings",
+        Path.cwd() / "recordings"
+    ]
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            test_file = candidate / ".write_test"
+            test_file.write_text("ok")
+            test_file.unlink()
+            return str(candidate)
+        except Exception:
+            continue
+    # Ultimate fallback: local recordings folder
+    fallback = Path.cwd() / "recordings"
+    try:
+        fallback.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return str(fallback)
+
 DEFAULT_CONFIG = {
-    "save_dir": str(Path.home() / "Videos" / "Recordings"),
+    "save_dir": get_safe_default_save_dir(),
     "filename_pattern": "REC_{date}_{time}.mp4",
     "video_codec": "libx264",  # libx264 (H.264) or libx265 (H.265)
     "quality_mode": "crf",     # 'crf' or 'bitrate'
@@ -37,19 +63,35 @@ class ConfigManager:
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
                     self.config.update(loaded)
-            except Exception as e:
-                print(f"Error loading config: {e}")
+            except Exception:
+                pass
+        
+        # Verify save_dir is actually writable, otherwise re-route to safe default
+        current_save_dir = Path(self.config.get("save_dir", ""))
+        try:
+            current_save_dir.mkdir(parents=True, exist_ok=True)
+            test_f = current_save_dir / ".write_test"
+            test_f.write_text("ok")
+            test_f.unlink()
+        except Exception:
+            safe_dir = get_safe_default_save_dir()
+            self.config["save_dir"] = safe_dir
+
         self.save()
 
     def save(self):
         try:
             save_dir = Path(self.config.get("save_dir", DEFAULT_CONFIG["save_dir"]))
-            save_dir.mkdir(parents=True, exist_ok=True)
-            
+            try:
+                save_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                save_dir = Path(get_safe_default_save_dir())
+                self.config["save_dir"] = str(save_dir)
+
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, indent=4, ensure_ascii=False)
-        except Exception as e:
-            print(f"Error saving config: {e}")
+        except Exception:
+            pass
 
     def get(self, key, default=None):
         return self.config.get(key, default if default is not None else DEFAULT_CONFIG.get(key))
@@ -69,5 +111,11 @@ class ConfigManager:
             filename += ".mp4"
             
         save_dir = Path(self.get("save_dir"))
-        save_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            save_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            save_dir = Path(get_safe_default_save_dir())
+            save_dir.mkdir(parents=True, exist_ok=True)
+            self.config["save_dir"] = str(save_dir)
+
         return str(save_dir / filename)

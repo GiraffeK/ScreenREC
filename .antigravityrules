@@ -1,0 +1,46 @@
+# AI Agent 行動準則
+
+---
+
+## 核心工作規範
+
+### 1. 規範遵從與履約證明 (Verification & Proof)
+- 在接收使用者的 Initial Prompt 後，必須同步讀取本規範。
+- 在每次結束任務時，主動告知使用者已依循此準則並提供證明，確保準則持續發揮效力。
+- **回覆末尾請一律附上標準「履約查核標籤」**：
+  ```markdown
+  ---
+  ### 📋 準則履約查核標籤 (Compliance Verification)
+  - **執行 Agent**：AI Coding Agent
+  - **準則遵從**：已讀取 `.antigravityrules` 並嚴格執行
+  - **開發歷程記錄**：已同步寫入 `development-log.md`
+  - **協同公告欄**：`Bulletin.json` 狀態檢視（目前無未解決之阻礙 / 或已填寫支援需求）
+  - **防彈指令遵循**：無終端搜尋、無單行測試，遵循 `test_safe_command.py` 與受保護檔案邊界
+  ```
+
+### 2. 全程開發歷程記錄 (`development-log.md`)
+- AI Agent 必須從頭到尾記錄程式開發的每一個過程。
+- 內容必須包含：接收到的 User Prompt、AI 的理解分析、思考與解法設計、執行過程與結果。
+- **日誌輪替機制**：當單一檔案過長（超過 500 行或 50KB）時，依序封存至 `docs/logs/development-log-YYYYMMDD-HHMMSS.md`，並在主檔維護歷史索引與最新進度。
+
+### 3. 跨系統支援協同公告欄 (`Bulletin.json`)
+- 維護專案根目錄的 `Bulletin.json`。
+- 當遇到自身無法獨立處理，需要其他 Agent / Skills / Tools / API / MCP 支援時，以 JSON 格式向後追加公告內容（必須帶有 `timestamp`、`source_agent`、`support_type`、`description` 等）。
+- 支援完成時，必須回填 `status: "completed"` 與 `resolution` 達成任務閉環。
+
+### 4. 檔案操作邊界與安全白名單
+- 在工作目錄 (`workspace`) 下允許 AI Agent 進行常規檔案管理操作（讀取、建立、編輯、備份），無需每一步反覆向使用者確認。
+- **高警戒保護邊界**：嚴禁修改或刪除 `.git/`、本機模型權重目錄（如 `C:\models\` 或自訂 weights 資料夾）以及各類敏感憑證與金鑰（如 `.env`、API Keys 等）。
+
+### 5. 終端機防彈原則 (免確認視窗工作流)
+為避免執行指令時頻繁觸發確認提示打斷自動化工作流，嚴格遵守：
+- **a. 禁止使用終端機進行檔案與字串搜尋**：
+  - 遇到搜尋或列舉需求（如 `Select-String`、`Get-ChildItem`、`git grep`、`dir /s` 等），優先使用內建原生讀取工具。
+  - 嚴禁透過終端機執行 Shell 搜尋指令。
+- **b. 所有單行測試與查詢統一寫入 `test_safe_command.py`**：
+  - 遇到任何唯讀查詢、環境檢查或單行 Python 測試（如 `python -c "..."` 或臨時腳本），嚴禁直接在終端機執行。
+  - 一律將程式碼/測試邏輯覆寫進專案根目錄的 `test_safe_command.py`。
+  - 終端機只執行固定的指令：`python test_safe_command.py`（若需 Python 3.12 可指定為專案對應 Python）。
+
+### 6. 持續對話與動態演進
+- AI Agent 可持續與使用者對話討論並修訂此行動準則與配套工具，確保各項規範持續符合實際開發場景與工作流體驗。

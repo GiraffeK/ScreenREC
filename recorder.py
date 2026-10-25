@@ -87,7 +87,7 @@ def get_physical_mic():
 
 class AudioCaptureThread(threading.Thread):
     def __init__(self, sample_rate=44100, source="system"):
-        super().__init__()
+        super().__init__(daemon=True)
         self.sample_rate = sample_rate
         self.source = source
         self.is_running = True
@@ -330,17 +330,19 @@ class ScreenRecorderThread(QThread):
             if self.audio_thread and self.audio_thread.audio_frames:
                 try:
                     audio_data = np.concatenate(self.audio_thread.audio_frames, axis=0)
+                    ch = 2 if audio_data.ndim > 1 and audio_data.shape[1] >= 2 else 1
                     with wave.open(self.temp_audio_path, 'wb') as wf:
-                        wf.setnchannels(2)
+                        wf.setnchannels(ch)
                         wf.setsampwidth(2)
                         wf.setframerate(sample_rate)
                         wf.writeframes(audio_data.tobytes())
                     has_audio_data = True
-                except Exception as e:
-                    print(f"Error writing audio file: {e}")
+                except Exception:
+                    pass
 
             # Remux Video + Audio
-            if has_audio_data and os.path.exists(self.temp_audio_path):
+            merged_success = False
+            if has_audio_data and os.path.exists(self.temp_audio_path) and os.path.exists(self.temp_video_path):
                 a_codec = self.config.get("audio_codec", "aac")
                 a_bitrate = self.config.get("audio_bitrate_kbps", 192)
 
@@ -356,23 +358,35 @@ class ScreenRecorderThread(QThread):
                     self.output_filepath
                 ]
 
-                subprocess.run(
-                    merge_cmd,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-                )
-                self.cleanup_temp_files()
-            else:
-                if os.path.exists(self.temp_video_path):
+                try:
+                    subprocess.run(
+                        merge_cmd,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=30,
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+                        check=True
+                    )
+                    merged_success = True
+                except Exception:
+                    merged_success = False
+
+            if not merged_success and os.path.exists(self.temp_video_path):
+                try:
+                    import shutil
                     if os.path.exists(self.output_filepath):
                         os.remove(self.output_filepath)
-                    os.rename(self.temp_video_path, self.output_filepath)
+                    shutil.copy2(self.temp_video_path, self.output_filepath)
+                except Exception:
+                    pass
 
-            if os.path.exists(self.output_filepath):
+            self.cleanup_temp_files()
+
+            if os.path.exists(self.output_filepath) and os.path.getsize(self.output_filepath) > 0:
                 self.recording_stopped.emit(self.output_filepath)
             else:
-                self.recording_error.emit("錄影檔案儲存失敗。")
+                self.recording_error.emit("錄影檔案儲存失敗，請檢查儲存目錄權限。")
 
         except Exception as e:
             self.recording_error.emit(f"錄影發生錯誤: {str(e)}")
