@@ -345,6 +345,10 @@ class MainWindow(QMainWindow):
         audio_fmt_layout.addWidget(self.combo_sample_rate)
         a_layout.addLayout(audio_fmt_layout)
 
+        self.chk_audio_auto_gain = QCheckBox("🔊 自動反轉 Windows 輸出音量衰減，保持錄音 100% 滿格音量 (Auto Volume Normalize)")
+        self.chk_audio_auto_gain.setStyleSheet("color: #00E676; font-weight: bold; margin-top: 4px;")
+        a_layout.addWidget(self.chk_audio_auto_gain)
+
         layout.addWidget(a_group)
 
         # 3. Path & File Name Settings Group
@@ -419,6 +423,7 @@ class MainWindow(QMainWindow):
 
         srate = self.config.get("audio_sample_rate", 44100)
         self.combo_sample_rate.setCurrentIndex(0 if srate == 44100 else 1)
+        self.chk_audio_auto_gain.setChecked(bool(self.config.get("audio_auto_gain", True)))
 
         # Path & Options
         self.txt_save_dir.setText(self.config.get("save_dir"))
@@ -443,6 +448,7 @@ class MainWindow(QMainWindow):
         abitrate_vals = [128, 192, 256, 320]
         self.config.set("audio_bitrate_kbps", abitrate_vals[self.combo_abitrate.currentIndex()])
         self.config.set("audio_sample_rate", 44100 if self.combo_sample_rate.currentIndex() == 0 else 48000)
+        self.config.set("audio_auto_gain", self.chk_audio_auto_gain.isChecked())
 
         self.config.set("save_dir", self.txt_save_dir.text().strip())
         self.config.set("filename_pattern", self.txt_filename_pattern.text().strip())

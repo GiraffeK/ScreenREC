@@ -39,6 +39,7 @@ DEFAULT_CONFIG = {
     "fps": 30,
     "audio_enabled": True,
     "audio_source": "system",  # 'system' (WASAPI Loopback), 'mic', 'mix', 'mute'
+    "audio_auto_gain": True,   # Automatically compensate Windows volume attenuation (100% full volume)
     "audio_codec": "aac",      # 'aac' or 'libmp3lame' (mp3)
     "audio_bitrate_kbps": 192, # 128, 192, 256, 320
     "audio_sample_rate": 44100,

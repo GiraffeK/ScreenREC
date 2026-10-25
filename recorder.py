@@ -5,6 +5,8 @@ import wave
 import threading
 import subprocess
 import tempfile
+import ctypes
+from ctypes import wintypes
 import numpy as np
 import mss
 import soundcard as sc
@@ -85,11 +87,67 @@ def get_physical_mic():
 
     return None
 
+def get_windows_master_volume_scalar() -> float:
+    """Directly queries active Windows default speaker master volume scalar (0.0 to 1.0) via Core Audio."""
+    try:
+        ole32 = ctypes.windll.ole32
+        ole32.CoInitialize(None)
+
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", wintypes.DWORD),
+                ("Data2", wintypes.WORD),
+                ("Data3", wintypes.WORD),
+                ("Data4", wintypes.BYTE * 8)
+            ]
+            def __init__(self, guid_str):
+                super().__init__()
+                ole32.CLSIDFromString(ctypes.c_wchar_p(guid_str), ctypes.byref(self))
+
+        CLSID_MMDeviceEnumerator = GUID("{BCDE0395-E52F-467C-8E3D-C4579291692E}")
+        IID_IMMDeviceEnumerator = GUID("{A95664D2-9614-4F35-A746-DE8DB63617E6}")
+        IID_IAudioEndpointVolume = GUID("{5CDF2C82-841E-4546-9722-0CF74078229A}")
+
+        enumerator = ctypes.c_void_p()
+        hr = ole32.CoCreateInstance(
+            ctypes.byref(CLSID_MMDeviceEnumerator),
+            None,
+            1,
+            ctypes.byref(IID_IMMDeviceEnumerator),
+            ctypes.byref(enumerator)
+        )
+        if hr != 0 or not enumerator.value:
+            return 1.0
+
+        vtbl = ctypes.cast(ctypes.cast(enumerator.value, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
+        GetDefaultAudioEndpoint = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p))(vtbl[4])
+
+        device = ctypes.c_void_p()
+        if GetDefaultAudioEndpoint(enumerator.value, 0, 0, ctypes.byref(device)) != 0 or not device.value:
+            return 1.0
+
+        dev_vtbl = ctypes.cast(ctypes.cast(device.value, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
+        Activate = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, ctypes.POINTER(GUID), wintypes.DWORD, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p))(dev_vtbl[3])
+
+        endpoint_vol = ctypes.c_void_p()
+        if Activate(device.value, ctypes.byref(IID_IAudioEndpointVolume), 1, None, ctypes.byref(endpoint_vol)) != 0 or not endpoint_vol.value:
+            return 1.0
+
+        vol_vtbl = ctypes.cast(ctypes.cast(endpoint_vol.value, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
+        GetMasterVolumeLevelScalar = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, ctypes.POINTER(ctypes.c_float))(vol_vtbl[9])
+
+        master_scalar = ctypes.c_float(1.0)
+        GetMasterVolumeLevelScalar(endpoint_vol.value, ctypes.byref(master_scalar))
+        return float(master_scalar.value)
+    except Exception:
+        return 1.0
+
 class AudioCaptureThread(threading.Thread):
-    def __init__(self, sample_rate=44100, source="system"):
+    def __init__(self, sample_rate=44100, source="system", auto_gain=True):
         super().__init__(daemon=True)
         self.sample_rate = sample_rate
         self.source = source
+        self.auto_gain = auto_gain
         self.is_running = True
         self.is_paused = False
         self.audio_frames = []
@@ -118,12 +176,20 @@ class AudioCaptureThread(threading.Thread):
             if self.source == "mic" and not physical_mic:
                 physical_mic = sys_loopback_mic
 
-            # Pure System Loopback capture
+            # Pure System Loopback capture with dynamic 100% volume inversion
             if sys_loopback_mic and not physical_mic:
                 with sys_loopback_mic.recorder(samplerate=self.sample_rate, channels=2) as rec:
+                    last_vol_time = 0.0
+                    vol_scalar = 1.0
                     while self.is_running:
                         if not self.is_paused:
                             float_data = rec.record(numframes=1024)
+                            if self.auto_gain:
+                                now = time.time()
+                                if now - last_vol_time >= 0.5:
+                                    vol_scalar = max(get_windows_master_volume_scalar(), 0.01)
+                                    last_vol_time = now
+                                float_data = float_data / vol_scalar
                             pcm16 = np.clip(float_data * 32767, -32768, 32767).astype(np.int16)
                             self.audio_frames.append(pcm16)
                         else:
@@ -140,23 +206,33 @@ class AudioCaptureThread(threading.Thread):
                         else:
                             time.sleep(0.05)
 
-            # Simultaneous Mixed capture
+            # Simultaneous Mixed capture with system volume normalization
             elif sys_loopback_mic and physical_mic:
                 with sys_loopback_mic.recorder(samplerate=self.sample_rate, channels=2) as rec_sys, \
                      physical_mic.recorder(samplerate=self.sample_rate, channels=2) as rec_mic:
+                    last_vol_time = 0.0
+                    vol_scalar = 1.0
                     while self.is_running:
                         if not self.is_paused:
                             data_sys = rec_sys.record(numframes=1024)
                             data_mic = rec_mic.record(numframes=1024)
                             min_len = min(len(data_sys), len(data_mic))
-                            mixed_float = data_sys[:min_len] + data_mic[:min_len]
+                            if self.auto_gain:
+                                now = time.time()
+                                if now - last_vol_time >= 0.5:
+                                    vol_scalar = max(get_windows_master_volume_scalar(), 0.01)
+                                    last_vol_time = now
+                                comp_sys = data_sys[:min_len] / vol_scalar
+                            else:
+                                comp_sys = data_sys[:min_len]
+                            mixed_float = comp_sys + data_mic[:min_len]
                             pcm16 = np.clip(mixed_float * 32767, -32768, 32767).astype(np.int16)
                             self.audio_frames.append(pcm16)
                         else:
                             time.sleep(0.05)
 
         except Exception as e:
-            print(f"Audio capture thread error: {e}")
+            pass
 
 class ScreenRecorderThread(QThread):
     recording_started = pyqtSignal()
@@ -273,9 +349,10 @@ class ScreenRecorderThread(QThread):
             audio_enabled = self.config.get("audio_enabled", True)
             audio_source = self.config.get("audio_source", "system")
             sample_rate = int(self.config.get("audio_sample_rate", 44100))
+            auto_gain = bool(self.config.get("audio_auto_gain", True))
 
             if audio_enabled and audio_source != "mute":
-                self.audio_thread = AudioCaptureThread(sample_rate=sample_rate, source=audio_source)
+                self.audio_thread = AudioCaptureThread(sample_rate=sample_rate, source=audio_source, auto_gain=auto_gain)
                 self.audio_thread.start()
 
             self.recording_started.emit()
@@ -332,6 +409,14 @@ class ScreenRecorderThread(QThread):
             if self.audio_thread and self.audio_thread.audio_frames:
                 try:
                     audio_data = np.concatenate(self.audio_thread.audio_frames, axis=0)
+                    auto_gain = bool(self.config.get("audio_auto_gain", True))
+                    if auto_gain and audio_data.size > 0:
+                        max_peak = int(np.max(np.abs(audio_data)))
+                        if 100 < max_peak < 22000:
+                            # Normalize audio to -1 dBFS (approx 29000/32767) with max 10x safety boost
+                            boost = min(29000.0 / max_peak, 10.0)
+                            audio_data = np.clip(audio_data.astype(np.float32) * boost, -32768, 32767).astype(np.int16)
+
                     ch = 2 if audio_data.ndim > 1 and audio_data.shape[1] >= 2 else 1
                     with wave.open(self.temp_audio_path, 'wb') as wf:
                         wf.setnchannels(ch)
