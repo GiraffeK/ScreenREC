@@ -1,6 +1,8 @@
 import subprocess
 import sys
 
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 def run_cmd(args):
     print(f"Running: {' '.join(args)}")
     res = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
@@ -16,11 +18,11 @@ def run_cmd(args):
 # 1. Stage all tracked and new files
 run_cmd(["git", "add", "."])
 
-# 2. Check status before commit
+# 2. Check status
 run_cmd(["git", "status", "--short"])
 
 # 3. Commit
-commit_msg = "fix: resolve recording save permission error & non-blocking video export with quick export feature"
+commit_msg = "fix: resolve COM initialization error & support multi-screen mixed-DPI area selection"
 run_cmd(["git", "commit", "-m", commit_msg])
 
 # 4. Push to remote main

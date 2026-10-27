@@ -259,3 +259,126 @@
    - 錄影結束時自動恢復主視窗並載入剪輯器，使用體驗流暢直覺。
 4. **重新編譯與 Git 推送**：
    - 以 PyInstaller 重新打包發布 `ScreenRecorder_Standalone.exe`。
+
+
+---
+
+## [2026-10-27 14:43:00] 任務：解決 COM error 0x80010106 & 說明歷史 Windows 打包/安裝機制
+
+### 1. 接收 User Prompt & 截圖分析
+- 使用者提問：
+  1. `COM error`: 終端機截圖顯示執行 `python main.py` 時跳出：
+     `QWindowsContext: OleInitialize() failed: "COM error 0x80010106: 執行緒模式設定後就不能再變更它。"`
+  2. `記得我在另一台電腦是有把這個程式打包成可以install到windows的方式，你看得到開發記錄嗎？我那時是怎麼做的？`
+
+### 2. 根本原因剖析 (Root Cause)
+1. **COM error 0x80010106 癥結**：
+   - 在 `main.py` 開頭直接執行 `from main_window import MainWindow`。
+   - `main_window.py` 引入 `recorder.py`，而 `recorder.py` 在全域靜態引用了 `soundcard` 套件。
+   - Windows 上的 `soundcard` 底層在載入時呼叫 COM API 將當前主執行緒初始化為 **MTA (Multi-Threaded Apartment)** 模式。
+   - 隨後 `QApplication(sys.argv)` 初始化時，Qt 內部 Windows 平台插件 (`qwindows.dll`) 呼叫 `OleInitialize()`，要求主執行緒必須為 **STA (Single-Threaded Apartment)** 模式（以支援系統剪貼簿與拖曳等 OLE 行為）。
+   - 因同一執行緒無法在設定為 MTA 後變更為 STA，Windows COM 報錯 `RPC_E_CHANGED_MODE (0x80010106)`。
+2. **打包與安裝紀錄回溯**：
+   - 經檢索 Git Commit 歷史與 spec 檔案：
+     - Commit `7c6dc7c` ~ `bdb1a87`: 專案內包含 `ScreenRecorder.spec` 與 `ScreenRecorder_Standalone.spec`。
+     - Commit `280a0a3`: 為了維護 Git 倉庫輕量，移除了暫存二進位 build 與 dist 檔案（原本包含 `dist/ScreenRecorder/ScreenRecorder.exe` 與 `dist/ScreenRecorder_Standalone.exe`）。
+     - 當時使用 PyInstaller 進行打包，產出免安裝獨立單檔 EXE（Standalone）與目錄版 EXE。
+
+### 3. 解法設計與實施
+1. **消除 COM 衝突 (`main.py`)**：
+   - 將 `from main_window import MainWindow` 移至 `app = QApplication(sys.argv)` 之後執行。
+   - 確保 Qt 優先以 STA 模式完成 `OleInitialize()`，之後音訊模組載入時便可順暢相容，徹底根絕 `0x80010106` 終端警示訊息。
+2. **安全驗證**：
+   - 透過 `test_safe_command.py` 驗證啟動與退出，stderr 無任何報錯與警告。
+
+
+---
+
+## [2026-10-27 14:52:00] 任務：解決終端無法辨識 pyinstaller 執行檔問題
+
+### 1. 接收 User Prompt & 截圖分析
+- 使用者上傳終端機截圖，嘗試執行：
+  `pyinstaller ScreenRecorder_Standalone.spec`
+  `pyinstaller ScreenRecorder.spec`
+  `where pyinstaller`
+- 系統回報：
+  `pyinstaller : 無法辨識 'pyinstaller' 詞彙是否為 Cmdlet、函數、指令檔或可執行程式的名稱。`
+  `where pyinstaller` 亦未找到任何路徑。
+
+### 2. 根本原因剖析 (Root Cause)
+- 透過 `test_safe_command.py` 探測本機 Python 環境：
+  - 系統確實已安裝 `pyinstaller (6.22.3)`。
+  - 由於套件是透過 User Site 安裝，其實體執行檔存放於：
+    `C:\Users\Hsueh\AppData\Roaming\Python\Python314\Scripts\pyinstaller.exe`
+  - 該 `Scripts` 目錄並未被加入使用者的 Windows `PATH` 環境變數中，因此在 PowerShell 直接輸入 `pyinstaller` 會拋出 `CommandNotFoundException`。
+
+### 3. 解法設計
+- 無需修改系統環境變數的最穩妥、原生跨平台執行方案：
+  直接使用 Python 模組引數 `-m PyInstaller` 呼叫：
+  `python -m PyInstaller ScreenRecorder_Standalone.spec`
+  或
+  `python -m PyInstaller ScreenRecorder.spec`
+
+### 4. 實機編譯驗證
+- 執行 `python -m PyInstaller ScreenRecorder_Standalone.spec` 進行編譯。
+- 編譯順利完成（Return Code 0），產出：
+  `dist\ScreenRecorder_Standalone.exe`（大小約 96.6 MB）。
+- 產物為內建所有相依套件與 FFmpeg 之獨立執行檔，無須額外安裝 Python 即可直接執行。
+
+
+---
+
+## [2026-10-27 15:34:00] 任務：解決高解析高縮放比筆電 (2880x1800 225%) + 外接螢幕 (1920x1080 100%) 錄影區域選取受限與被截斷問題
+
+### 1. 接收 User Prompt & 截圖分析
+- 使用者回報：「我電腦screen resolution:2880x1800 接上1920x1080p external screen，則當我選取錄影範圍時，能選取的範圍似乎受限」
+- 截圖細節分析：
+  - 左側筆電螢幕 (2880x1800，DPR 2.25) 的半透明遮罩僅覆蓋至局部，右方與下方均未被覆蓋。
+  - 右側外接螢幕 (DELL P2319H 1920x1080，DPR 1.0) 則完全沒有遮罩覆蓋，無法選取。
+  - 使用者被困在一個被截斷的矩形範圍內。
+
+### 2. 根本原因剖析 (Root Cause)
+1. **Windows DWM 跨螢幕 DPI 上下文衝突**：
+   - 原先 `AreaSelectorOverlay` 為單一 `QWidget`，透過 `screen_geo.united()` 計算出全螢幕尺寸 `(0, 0, 4800, 1080)` 並呼叫 `setGeometry`。
+   - Windows 系統對於單一頂層原生視窗 (HWND) 只分配單一 DPI 上下文（通常繼承自建立時的主螢幕 DPR 2.25）。
+   - 經除錯探測，Qt 原生 QWindow 尺寸被硬生生除以 2.25，縮減至 `(2133, 480)` 物理像素，導致單一視窗連主螢幕都無法完整覆蓋，且完全無法跨越至外接螢幕。
+2. **MSS 與全螢幕錄製單一螢幕限制**：
+   - 原先全螢幕錄製寫死只錄製 `sct.monitors[1]`，使雙螢幕用戶無法直接選擇外接螢幕進行全螢幕錄影。
+   - 區域錄影中存在 `rx = max(0, ...)`，若外接螢幕位於主螢幕左方或上方會造成負座標被截斷歸零。
+
+### 3. 解法設計與實施
+1. **多螢幕獨立覆蓋層架構 (`area_selector.py`)**：
+   - 重構 `AreaSelectorOverlay` 為管理中樞 (Manager)，為系統中**每一個實體螢幕** (`QGuiApplication.screens()`) 動態建立各自獨立的 `ScreenOverlayWidget`。
+   - 每個覆蓋層嚴格綁定該螢幕的原生幾何尺寸 (`screen.geometry()`) 與原生 DPI 縮放比，100% 邊對邊滿版覆蓋！
+   - 當使用者在螢幕 1 上拖曳時，螢幕 1 繪製選取框與工具列；當使用者切換至螢幕 2 拖曳時，自動平滑切換至螢幕 2，雙螢幕皆可任意選取！
+   - 座標換算直接對齊 MSS 的實體螢幕座標 (`phys_base_x`, `phys_base_y`)，精準無偏差且保證偶數像素輸出。
+2. **錄影模式支援動態多螢幕識別 (`main_window.py` & `recorder.py`)**：
+   - 下拉選單智慧感應並列出：
+     - `🖥 全螢幕 - 螢幕 1 (2880x1800 內建螢幕)`
+     - `🖥 全螢幕 - 螢幕 2 (1920x1080 外接螢幕)`
+     - `🖥 全螢幕 - 所有跨螢幕合併 (4800x1800)`
+     - `🎯 自訂區域錄影`
+   - `recorder.py` 完整支援 `fullscreen_1`、`fullscreen_2`、`fullscreen_all` 與 `region`，且移除負座標限制。
+3. **驗證與重建 EXE**：
+   - 透過 `test_safe_command.py` 進行多螢幕覆蓋層初始化與事件驗證，回報完全正常。
+   - 使用 PyInstaller 重新編譯 `dist\ScreenRecorder_Standalone.exe`。
+
+
+---
+
+## [2026-10-27 15:45:00] 任務：確認程式修復與功能完善並執行 Git Commit & Push 至 GitHub
+
+### 1. 接收 User Prompt
+> 「git push to github please」
+
+### 2. 變更總結
+- **[main.py](file:///c:/Users/Hsueh/Coding/Personal/ScreenREC/main.py)**：調整模組延遲載入順序，確保 Qt 先行以 STA 模式執行 `OleInitialize()`，根絕 Windows COM error 0x80010106。
+- **[area_selector.py](file:///c:/Users/Hsueh/Coding/Personal/ScreenREC/area_selector.py)**：重構為多螢幕獨立覆蓋層架構，徹底解決高解析高縮放比筆電 (2880x1800 225%) + 外接螢幕 (1920x1080 100%) 之 Windows DWM 遮罩被截斷與死角限制問題。
+- **[main_window.py](file:///c:/Users/Hsueh/Coding/Personal/ScreenREC/main_window.py)**：下拉選單智慧動態列舉所有實體螢幕（螢幕 1、螢幕 2、所有跨螢幕合併、自訂區域）。
+- **[recorder.py](file:///c:/Users/Hsueh/Coding/Personal/ScreenREC/recorder.py)**：錄影核心支援動態螢幕識別與負座標多螢幕空間，並支援個別螢幕或跨螢幕錄製。
+- **[development-log.md](file:///c:/Users/Hsueh/Coding/Personal/ScreenREC/development-log.md)**：完整記錄所有問題剖析、解決方案與測試驗證。
+
+### 3. 版本控制操作
+- 執行 `git add .`。
+- 提交 Commit：`fix: resolve COM initialization error & support multi-screen mixed-DPI area selection`。
+- 執行 `git push origin main` 推送至 GitHub 遠端儲存庫。

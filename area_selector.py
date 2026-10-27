@@ -1,8 +1,9 @@
 import sys
+import mss
 from enum import Enum
-from PyQt6.QtCore import Qt, QRect, pyqtSignal, QPoint, QSize
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QCursor, QGuiApplication
-from PyQt6.QtWidgets import QWidget, QPushButton, QHBoxLayout, QLabel, QApplication
+from PyQt6.QtCore import Qt, QRect, pyqtSignal, QPoint, QSize, QObject
+from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QCursor, QGuiApplication
+from PyQt6.QtWidgets import QWidget, QPushButton, QHBoxLayout, QLabel
 
 class DragMode(Enum):
     NONE = 0
@@ -28,7 +29,7 @@ class FloatingToolBar(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setStyleSheet("""
             QWidget {
-                background-color: rgba(24, 24, 24, 240);
+                background-color: rgba(24, 24, 24, 245);
                 border: 1px solid #444;
                 border-radius: 6px;
             }
@@ -70,7 +71,6 @@ class FloatingToolBar(QWidget):
         layout.setSpacing(8)
 
         self.lbl_info = QLabel("1280 x 720")
-        
         self.btn_confirm = QPushButton("✔ 確認範圍")
         self.btn_start_rec = QPushButton("🔴 直接錄影")
         self.btn_start_rec.setObjectName("btn_rec")
@@ -86,17 +86,20 @@ class FloatingToolBar(QWidget):
         self.btn_start_rec.clicked.connect(self.start_rec_clicked.emit)
         self.btn_cancel.clicked.connect(self.cancel_clicked.emit)
 
-    def update_info(self, w: int, h: int, x: int, y: int):
-        self.lbl_info.setText(f" {w}x{h} (X:{x}, Y:{y}) ")
+    def update_info(self, w: int, h: int, x: int, y: int, screen_name: str = ""):
+        name_str = f" [{screen_name}]" if screen_name else ""
+        self.lbl_info.setText(f" {w}x{h} (X:{x}, Y:{y}){name_str} ")
 
-class AreaSelectorOverlay(QWidget):
-    area_selected = pyqtSignal(int, int, int, int)           # x, y, w, h
-    start_rec_requested = pyqtSignal(int, int, int, int)    # x, y, w, h
-
+class ScreenOverlayWidget(QWidget):
     HANDLE_SIZE = 10
 
-    def __init__(self):
+    def __init__(self, screen_idx: int, screen, mss_mon: dict, manager):
         super().__init__()
+        self.screen_idx = screen_idx
+        self.target_screen = screen
+        self.mss_mon = mss_mon
+        self.manager = manager
+
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
@@ -105,27 +108,21 @@ class AreaSelectorOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
         self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
-        
+
+        # Position widget exactly on this physical screen
+        self.setGeometry(screen.geometry())
+
         self.start_point = QPoint()
         self.drag_mode = DragMode.NONE
         self.selection_rect = QRect()
         self.drag_start_rect = QRect()
         self.drag_start_mouse = QPoint()
 
-        # Floating Toolbar Widget
         self.toolbar = FloatingToolBar(self)
         self.toolbar.hide()
         self.toolbar.confirm_clicked.connect(self.on_confirm)
         self.toolbar.start_rec_clicked.connect(self.on_start_rec)
-        self.toolbar.cancel_clicked.connect(self.close)
-
-        self.update_virtual_geometry()
-
-    def update_virtual_geometry(self):
-        screen_geo = QRect()
-        for screen in QGuiApplication.screens():
-            screen_geo = screen_geo.united(screen.geometry())
-        self.setGeometry(screen_geo)
+        self.toolbar.cancel_clicked.connect(self.manager.close)
 
     def get_handles(self) -> dict:
         if self.selection_rect.isNull() or not self.selection_rect.isValid():
@@ -172,8 +169,14 @@ class AreaSelectorOverlay(QWidget):
         }
         self.setCursor(QCursor(cursor_map.get(mode, Qt.CursorShape.CrossCursor)))
 
+    def clear_selection(self):
+        self.selection_rect = QRect()
+        self.toolbar.hide()
+        self.update()
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            self.manager.set_active_screen(self)
             pos = event.position().toPoint()
             
             if self.selection_rect.isValid() and not self.selection_rect.isNull():
@@ -184,7 +187,6 @@ class AreaSelectorOverlay(QWidget):
                     self.drag_start_rect = QRect(self.selection_rect)
                     return
 
-            # Start creating new selection rectangle
             self.start_point = pos
             self.drag_mode = DragMode.CREATING
             self.selection_rect = QRect(pos, QSize(0, 0))
@@ -195,15 +197,12 @@ class AreaSelectorOverlay(QWidget):
         pos = event.position().toPoint()
 
         if self.drag_mode == DragMode.CREATING:
-            x1 = min(self.start_point.x(), pos.x())
-            y1 = min(self.start_point.y(), pos.y())
-            x2 = max(self.start_point.x(), pos.x())
-            y2 = max(self.start_point.y(), pos.y())
-            w = max(100, x2 - x1)
-            h = max(100, y2 - y1)
-            # Enforce even dimensions
-            w = w if w % 2 == 0 else w - 1
-            h = h if h % 2 == 0 else h - 1
+            x1 = max(0, min(self.start_point.x(), pos.x()))
+            y1 = max(0, min(self.start_point.y(), pos.y()))
+            x2 = min(self.width(), max(self.start_point.x(), pos.x()))
+            y2 = min(self.height(), max(self.start_point.y(), pos.y()))
+            w = max(50, x2 - x1)
+            h = max(50, y2 - y1)
             self.selection_rect = QRect(x1, y1, w, h)
             self.update()
 
@@ -212,6 +211,14 @@ class AreaSelectorOverlay(QWidget):
             dy = pos.y() - self.drag_start_mouse.y()
             new_rect = QRect(self.drag_start_rect)
             new_rect.translate(dx, dy)
+            if new_rect.left() < 0:
+                new_rect.moveLeft(0)
+            if new_rect.top() < 0:
+                new_rect.moveTop(0)
+            if new_rect.right() > self.width():
+                new_rect.moveRight(self.width())
+            if new_rect.bottom() > self.height():
+                new_rect.moveBottom(self.height())
             self.selection_rect = new_rect
             self.update_toolbar_position()
             self.update()
@@ -227,25 +234,21 @@ class AreaSelectorOverlay(QWidget):
             left, right, top, bottom = r.left(), r.right(), r.top(), r.bottom()
 
             if self.drag_mode in (DragMode.RESIZE_TL, DragMode.RESIZE_BL, DragMode.RESIZE_L):
-                left = min(r.right() - 100, r.left() + dx)
+                left = min(r.right() - 50, max(0, r.left() + dx))
             if self.drag_mode in (DragMode.RESIZE_TR, DragMode.RESIZE_BR, DragMode.RESIZE_R):
-                right = max(r.left() + 100, r.right() + dx)
+                right = max(r.left() + 50, min(self.width(), r.right() + dx))
             if self.drag_mode in (DragMode.RESIZE_TL, DragMode.RESIZE_TR, DragMode.RESIZE_T):
-                top = min(r.bottom() - 100, r.top() + dy)
+                top = min(r.bottom() - 50, max(0, r.top() + dy))
             if self.drag_mode in (DragMode.RESIZE_BL, DragMode.RESIZE_BR, DragMode.RESIZE_B):
-                bottom = max(r.top() + 100, r.bottom() + dy)
+                bottom = max(r.top() + 50, min(self.height(), r.bottom() + dy))
 
             w = right - left
             h = bottom - top
-            w = w if w % 2 == 0 else w - 1
-            h = h if h % 2 == 0 else h - 1
-
             self.selection_rect = QRect(left, top, w, h)
             self.update_toolbar_position()
             self.update()
 
         else:
-            # Hover mode cursor updating
             if self.selection_rect.isValid():
                 hit_mode = self.hit_test(pos)
                 self.update_cursor_for_mode(hit_mode)
@@ -254,16 +257,36 @@ class AreaSelectorOverlay(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             if self.drag_mode != DragMode.NONE:
                 self.drag_mode = DragMode.NONE
-                if self.selection_rect.width() >= 100 and self.selection_rect.height() >= 100:
+                if self.selection_rect.width() >= 50 and self.selection_rect.height() >= 50:
                     self.update_toolbar_position()
                     self.toolbar.show()
                 self.update()
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_Q):
-            self.close()
+            self.manager.close()
         elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.on_confirm()
+
+    def get_physical_coordinates(self):
+        r = self.selection_rect
+        dpr = self.target_screen.devicePixelRatio()
+        base_x = self.mss_mon["left"]
+        base_y = self.mss_mon["top"]
+
+        phys_x = base_x + int(round(r.x() * dpr))
+        phys_y = base_y + int(round(r.y() * dpr))
+        phys_w = int(round(r.width() * dpr))
+        phys_h = int(round(r.height() * dpr))
+
+        # Clamp within monitor physical bounds
+        phys_w = min(phys_w, self.mss_mon["width"] - (phys_x - base_x))
+        phys_h = min(phys_h, self.mss_mon["height"] - (phys_y - base_y))
+
+        # Enforce even dimensions for FFmpeg encoder compatibility
+        phys_w = phys_w if phys_w % 2 == 0 else phys_w - 1
+        phys_h = phys_h if phys_h % 2 == 0 else phys_h - 1
+        return phys_x, phys_y, phys_w, phys_h
 
     def update_toolbar_position(self):
         if self.selection_rect.isNull():
@@ -274,81 +297,97 @@ class AreaSelectorOverlay(QWidget):
         tb_h = self.toolbar.height()
 
         r = self.selection_rect
-        # Position toolbar centered at the bottom of selection rect
         tb_x = r.x() + (r.width() - tb_w) // 2
         tb_y = r.bottom() + 8
 
-        # If near bottom boundary, place above rectangle
         if tb_y + tb_h > self.height() - 10:
             tb_y = r.top() - tb_h - 8
 
         self.toolbar.move(tb_x, tb_y)
         
-        geo = self.geometry()
-        gx = r.x() + geo.x()
-        gy = r.y() + geo.y()
-        self.toolbar.update_info(r.width(), r.height(), gx, gy)
-
-    def get_global_coordinates(self):
-        r = self.selection_rect
-        geo = self.geometry()
-        gx = r.x() + geo.x()
-        gy = r.y() + geo.y()
-        w = r.width()
-        h = r.height()
-
-        # Convert logical screen coordinates to physical pixels using Device Pixel Ratio (DPI Scale)
-        screen = QGuiApplication.screenAt(QPoint(gx, gy)) or QGuiApplication.primaryScreen()
-        dpr = screen.devicePixelRatio() if screen else 1.0
-
-        phys_x = int(round(gx * dpr))
-        phys_y = int(round(gy * dpr))
-        phys_w = int(round(w * dpr))
-        phys_h = int(round(h * dpr))
-
-        # Enforce even dimensions for FFmpeg encoder compatibility
-        phys_w = phys_w if phys_w % 2 == 0 else phys_w - 1
-        phys_h = phys_h if phys_h % 2 == 0 else phys_h - 1
-
-        return phys_x, phys_y, phys_w, phys_h
+        px, py, pw, ph = self.get_physical_coordinates()
+        s_name = self.target_screen.name()
+        self.toolbar.update_info(pw, ph, px, py, s_name)
 
     def on_confirm(self):
-        if self.selection_rect.isValid():
-            gx, gy, w, h = self.get_global_coordinates()
-            self.area_selected.emit(gx, gy, w, h)
-        self.close()
+        if self.selection_rect.isValid() and self.selection_rect.width() >= 50:
+            px, py, pw, ph = self.get_physical_coordinates()
+            self.manager.confirm_area(px, py, pw, ph)
 
     def on_start_rec(self):
-        if self.selection_rect.isValid():
-            gx, gy, w, h = self.get_global_coordinates()
-            self.start_rec_requested.emit(gx, gy, w, h)
-        self.close()
+        if self.selection_rect.isValid() and self.selection_rect.width() >= 50:
+            px, py, pw, ph = self.get_physical_coordinates()
+            self.manager.start_rec_area(px, py, pw, ph)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Draw dark semi-transparent overlay
         painter.fillRect(self.rect(), QColor(0, 0, 0, 130))
 
         if not self.selection_rect.isNull() and self.selection_rect.isValid():
-            # Clear selection rectangle inner area
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
             painter.fillRect(self.selection_rect, Qt.GlobalColor.transparent)
 
-            # Draw green bounding border
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
             border_pen = QPen(QColor(0, 230, 118), 2, Qt.PenStyle.SolidLine)
             painter.setPen(border_pen)
             painter.drawRect(self.selection_rect)
 
-            # Draw 8 handle control nodes (4 corners + 4 edges)
             handles = self.get_handles()
             handle_pen = QPen(QColor(255, 255, 255), 1.5)
             handle_brush = QBrush(QColor(0, 230, 118))
-            
             painter.setPen(handle_pen)
             painter.setBrush(handle_brush)
-            
             for handle_rect in handles.values():
                 painter.drawRect(handle_rect)
+
+class AreaSelectorOverlay(QObject):
+    area_selected = pyqtSignal(int, int, int, int)
+    start_rec_requested = pyqtSignal(int, int, int, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.overlays = []
+        screens = QGuiApplication.screens()
+        try:
+            with mss.mss() as sct:
+                monitors = sct.monitors
+        except Exception:
+            monitors = []
+
+        for idx, screen in enumerate(screens):
+            if idx + 1 < len(monitors):
+                mon = monitors[idx + 1]
+            else:
+                dpr = screen.devicePixelRatio()
+                geo = screen.geometry()
+                mon = {
+                    "left": int(round(geo.x() * dpr)),
+                    "top": int(round(geo.y() * dpr)),
+                    "width": int(round(geo.width() * dpr)),
+                    "height": int(round(geo.height() * dpr))
+                }
+            overlay = ScreenOverlayWidget(idx, screen, mon, self)
+            self.overlays.append(overlay)
+
+    def set_active_screen(self, active_overlay):
+        for o in self.overlays:
+            if o != active_overlay:
+                o.clear_selection()
+
+    def show(self):
+        for o in self.overlays:
+            o.show()
+
+    def close(self):
+        for o in self.overlays:
+            o.close()
+
+    def confirm_area(self, x, y, w, h):
+        self.area_selected.emit(x, y, w, h)
+        self.close()
+
+    def start_rec_area(self, x, y, w, h):
+        self.start_rec_requested.emit(x, y, w, h)
+        self.close()

@@ -2,7 +2,7 @@ import os
 import sys
 from pathlib import Path
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtGui import QFont, QIcon, QGuiApplication
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QPushButton, QLabel, QComboBox, QSpinBox, QSlider, QCheckBox,
@@ -310,7 +310,7 @@ class MainWindow(QMainWindow):
 
         mode_layout = QHBoxLayout()
         self.combo_mode = QComboBox()
-        self.combo_mode.addItems(["全螢幕錄影", "自訂區域錄影"])
+        self.populate_record_modes()
         self.combo_mode.currentIndexChanged.connect(self.on_mode_changed)
 
         self.btn_select_area = QPushButton("🎯 畫面選取區域")
@@ -531,8 +531,13 @@ class MainWindow(QMainWindow):
 
     def load_config_to_ui(self):
         mode = self.config.get("record_mode", "fullscreen")
-        self.combo_mode.setCurrentIndex(0 if mode == "fullscreen" else 1)
-        self.on_mode_changed(self.combo_mode.currentIndex())
+        found_idx = 0
+        for i in range(self.combo_mode.count()):
+            if self.combo_mode.itemData(i) == mode:
+                found_idx = i
+                break
+        self.combo_mode.setCurrentIndex(found_idx)
+        self.on_mode_changed(found_idx)
 
         saved_vcodec = self.config.get("video_codec", "libx264")
         found_idx = 0
@@ -602,13 +607,38 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(self, "成功", "所有設定已成功儲存！")
 
-    def on_mode_changed(self, index):
-        if index == 0:
-            self.config.set("record_mode", "fullscreen")
-            self.btn_select_area.setEnabled(False)
+    def populate_record_modes(self):
+        self.combo_mode.clear()
+        screens = QGuiApplication.screens()
+        try:
+            import mss
+            with mss.mss() as sct:
+                monitors = sct.monitors
+        except Exception:
+            monitors = []
+
+        if len(screens) <= 1:
+            self.combo_mode.addItem("🖥 全螢幕錄影", "fullscreen")
         else:
-            self.config.set("record_mode", "region")
+            for idx, screen in enumerate(screens):
+                mon = monitors[idx + 1] if idx + 1 < len(monitors) else None
+                res_str = f"{mon['width']}x{mon['height']}" if mon else f"{screen.geometry().width()}x{screen.geometry().height()}"
+                s_name = screen.name()
+                label = f"🖥 全螢幕 - 螢幕 {idx + 1} ({res_str} {s_name})"
+                self.combo_mode.addItem(label, f"fullscreen_{idx+1}")
+            if len(monitors) > 0:
+                all_mon = monitors[0]
+                self.combo_mode.addItem(f"🖥 全螢幕 - 所有跨螢幕合併 ({all_mon['width']}x{all_mon['height']})", "fullscreen_all")
+        
+        self.combo_mode.addItem("🎯 自訂區域錄影", "region")
+
+    def on_mode_changed(self, index):
+        mode_data = self.combo_mode.itemData(index) or "fullscreen"
+        self.config.set("record_mode", mode_data)
+        if mode_data == "region":
             self.btn_select_area.setEnabled(True)
+        else:
+            self.btn_select_area.setEnabled(False)
         self.update_region_info_label()
 
     def on_qmode_changed(self, index):
@@ -630,6 +660,11 @@ class MainWindow(QMainWindow):
         self.config.set("region_y", y)
         self.config.set("region_width", w)
         self.config.set("region_height", h)
+        # Ensure combo is set to region
+        for i in range(self.combo_mode.count()):
+            if self.combo_mode.itemData(i) == "region":
+                self.combo_mode.setCurrentIndex(i)
+                break
         self.update_region_info_label()
 
     def on_area_start_rec(self, x, y, w, h):
@@ -638,14 +673,22 @@ class MainWindow(QMainWindow):
 
     def update_region_info_label(self):
         mode = self.config.get("record_mode", "fullscreen")
-        if mode == "fullscreen":
-            self.lbl_region_info.setText("座標區域: 🖥 全螢幕錄製")
-        else:
-            rx = self.config.get("region_x")
-            ry = self.config.get("region_y")
-            rw = self.config.get("region_width")
-            rh = self.config.get("region_height")
+        if mode == "region":
+            rx = self.config.get("region_x", 0)
+            ry = self.config.get("region_y", 0)
+            rw = self.config.get("region_width", 1280)
+            rh = self.config.get("region_height", 720)
             self.lbl_region_info.setText(f"座標: X:{rx}, Y:{ry} | 寬:{rw}px, 高:{rh}px")
+        elif mode == "fullscreen_all":
+            self.lbl_region_info.setText("座標區域: 🖥 所有跨螢幕合併錄製")
+        elif mode.startswith("fullscreen_"):
+            try:
+                m_idx = mode.split("_")[1]
+                self.lbl_region_info.setText(f"座標區域: 🖥 全螢幕錄製 (螢幕 {m_idx})")
+            except Exception:
+                self.lbl_region_info.setText("座標區域: 🖥 全螢幕錄製")
+        else:
+            self.lbl_region_info.setText("座標區域: 🖥 全螢幕錄製")
 
     def browse_save_directory(self):
         dir_path = QFileDialog.getExistingDirectory(
@@ -755,7 +798,7 @@ class MainWindow(QMainWindow):
         self.mini_btn_pause.setText("⏸")
         self.mini_btn_stop.setEnabled(False)
         self.combo_mode.setEnabled(True)
-        if self.combo_mode.currentIndex() == 1:
+        if self.combo_mode.currentData() == "region":
             self.btn_select_area.setEnabled(True)
 
         self.lbl_status.setText("✅ 錄影完成！已儲存")

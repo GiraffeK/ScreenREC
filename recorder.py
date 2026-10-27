@@ -283,10 +283,20 @@ class ScreenRecorderThread(QThread):
             mode = self.config.get("record_mode", "fullscreen")
             with mss.mss() as sct:
                 if mode == "region":
-                    rx = max(0, int(self.config.get("region_x", 0)))
-                    ry = max(0, int(self.config.get("region_y", 0)))
+                    rx = int(self.config.get("region_x", 0))
+                    ry = int(self.config.get("region_y", 0))
                     rw = max(100, int(self.config.get("region_width", 1280)))
                     rh = max(100, int(self.config.get("region_height", 720)))
+                elif mode == "fullscreen_all":
+                    monitor = sct.monitors[0]
+                    rx, ry, rw, rh = monitor["left"], monitor["top"], monitor["width"], monitor["height"]
+                elif mode.startswith("fullscreen_"):
+                    try:
+                        m_idx = int(mode.split("_")[1])
+                        monitor = sct.monitors[m_idx] if m_idx < len(sct.monitors) else sct.monitors[1]
+                    except Exception:
+                        monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+                    rx, ry, rw, rh = monitor["left"], monitor["top"], monitor["width"], monitor["height"]
                 else:
                     monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
                     rx, ry, rw, rh = monitor["left"], monitor["top"], monitor["width"], monitor["height"]
