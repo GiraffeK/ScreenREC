@@ -12,7 +12,10 @@ from PyQt6.QtWidgets import (
 
 from config import ConfigManager
 from area_selector import AreaSelectorOverlay
-from recorder import ScreenRecorderThread, detect_available_hw_encoders
+from recorder import (
+    ScreenRecorderThread, detect_available_hw_encoders,
+    list_system_audio_devices, get_device_native_format
+)
 from editor import VideoEditorWidget
 
 DARK_STYLESHEET = """
@@ -328,6 +331,11 @@ class MainWindow(QMainWindow):
         self.lbl_region_info.setStyleSheet("color: #00E676; font-size: 11px; font-weight: bold;")
         region_layout.addWidget(self.lbl_region_info)
 
+        # Active Audio Output Target Info
+        self.lbl_audio_info = QLabel("🔊 音訊: 系統預設")
+        self.lbl_audio_info.setStyleSheet("color: #4FC3F7; font-size: 10px;")
+        region_layout.addWidget(self.lbl_audio_info)
+
         layout.addWidget(region_group)
 
         # Status Display Box
@@ -470,6 +478,20 @@ class MainWindow(QMainWindow):
         source_layout.addWidget(self.combo_audio_source, 1)
         a_layout.addLayout(source_layout)
 
+        device_layout = QHBoxLayout()
+        self.combo_audio_device = QComboBox()
+        self.btn_refresh_audio = QPushButton("🔄")
+        self.btn_refresh_audio.setToolTip("重新偵測系統播放裝置（例如外接電視/耳機後）")
+        self.btn_refresh_audio.setFixedWidth(28)
+        self.btn_refresh_audio.setFixedHeight(24)
+        self.btn_refresh_audio.clicked.connect(self.refresh_audio_devices)
+        self.populate_audio_devices()
+
+        device_layout.addWidget(QLabel("裝置:"))
+        device_layout.addWidget(self.combo_audio_device, 1)
+        device_layout.addWidget(self.btn_refresh_audio)
+        a_layout.addLayout(device_layout)
+
         audio_fmt_layout = QHBoxLayout()
         self.combo_acodec = QComboBox()
         self.combo_acodec.addItems(["AAC", "MP3"])
@@ -479,7 +501,9 @@ class MainWindow(QMainWindow):
         self.combo_abitrate.setCurrentIndex(1)
 
         self.combo_sample_rate = QComboBox()
-        self.combo_sample_rate.addItems(["44.1 kHz", "48 kHz"])
+        self.combo_sample_rate.addItem("🔄 自動偵測", userData=0)
+        self.combo_sample_rate.addItem("44.1 kHz", userData=44100)
+        self.combo_sample_rate.addItem("48 kHz", userData=48000)
 
         audio_fmt_layout.addWidget(QLabel("格式:"))
         audio_fmt_layout.addWidget(self.combo_acodec)
@@ -566,6 +590,14 @@ class MainWindow(QMainWindow):
                 break
         self.combo_audio_source.setCurrentIndex(found_src_idx)
 
+        saved_audio_dev = self.config.get("audio_output_device_id", "auto")
+        found_dev_idx = 0
+        for i in range(self.combo_audio_device.count()):
+            if self.combo_audio_device.itemData(i) == saved_audio_dev:
+                found_dev_idx = i
+                break
+        self.combo_audio_device.setCurrentIndex(found_dev_idx)
+
         acodec = self.config.get("audio_codec", "aac")
         self.combo_acodec.setCurrentIndex(0 if acodec == "aac" else 1)
         
@@ -573,8 +605,13 @@ class MainWindow(QMainWindow):
         abitrate_map = {128: 0, 192: 1, 256: 2, 320: 3}
         self.combo_abitrate.setCurrentIndex(abitrate_map.get(abitrate, 1))
 
-        srate = self.config.get("audio_sample_rate", 44100)
-        self.combo_sample_rate.setCurrentIndex(0 if srate == 44100 else 1)
+        srate = int(self.config.get("audio_sample_rate", 0))
+        found_sr_idx = 0
+        for i in range(self.combo_sample_rate.count()):
+            if self.combo_sample_rate.itemData(i) == srate:
+                found_sr_idx = i
+                break
+        self.combo_sample_rate.setCurrentIndex(found_sr_idx)
         self.chk_audio_auto_gain.setChecked(bool(self.config.get("audio_auto_gain", True)))
 
         # Path & Options
@@ -584,6 +621,7 @@ class MainWindow(QMainWindow):
         self.chk_auto_editor.setChecked(bool(self.config.get("auto_open_editor", True)))
 
         self.update_region_info_label()
+        self.update_audio_info_label()
 
     def save_settings_from_ui(self):
         selected_vcodec = self.combo_vcodec.currentData() or "libx264"
@@ -595,17 +633,80 @@ class MainWindow(QMainWindow):
 
         self.config.set("audio_enabled", self.chk_audio_enable.isChecked())
         self.config.set("audio_source", self.combo_audio_source.currentData() or "system")
+        self.config.set("audio_output_device_id", self.combo_audio_device.currentData() or "auto")
         self.config.set("audio_codec", "aac" if self.combo_acodec.currentIndex() == 0 else "libmp3lame")
         
         abitrate_vals = [128, 192, 256, 320]
         self.config.set("audio_bitrate_kbps", abitrate_vals[self.combo_abitrate.currentIndex()])
-        self.config.set("audio_sample_rate", 44100 if self.combo_sample_rate.currentIndex() == 0 else 48000)
+        sr_data = self.combo_sample_rate.currentData()
+        self.config.set("audio_sample_rate", int(sr_data) if sr_data is not None else 0)
         self.config.set("audio_auto_gain", self.chk_audio_auto_gain.isChecked())
 
         self.config.set("save_dir", self.txt_save_dir.text().strip())
         self.config.set("filename_pattern", self.txt_filename_pattern.text().strip())
 
+        self.update_audio_info_label()
         QMessageBox.information(self, "成功", "所有設定已成功儲存！")
+
+    def populate_audio_devices(self):
+        current_data = self.combo_audio_device.currentData() if self.combo_audio_device.count() > 0 else self.config.get("audio_output_device_id", "auto")
+        self.combo_audio_device.clear()
+        _, default_name, devices = list_system_audio_devices()
+        if len(devices) > 1:
+            auto_label = f"🔄 全自動多出口偵測 (同時監聽 {len(devices)} 個播放裝置)"
+        elif default_name:
+            auto_label = f"🔄 全自動偵測 ({default_name})"
+        else:
+            auto_label = "🔄 全自動偵測所有播放裝置"
+        self.combo_audio_device.addItem(auto_label, userData="auto")
+        for dev_id, dev_name in devices:
+            self.combo_audio_device.addItem(f"🔊 {dev_name}", userData=dev_id)
+
+        found_idx = 0
+        for i in range(self.combo_audio_device.count()):
+            if self.combo_audio_device.itemData(i) == current_data:
+                found_idx = i
+                break
+        self.combo_audio_device.setCurrentIndex(found_idx)
+
+    def refresh_audio_devices(self):
+        self.populate_audio_devices()
+        self.update_audio_info_label()
+
+    def update_audio_info_label(self):
+        if not self.config.get("audio_enabled", True) or self.config.get("audio_source", "system") == "mute":
+            self.lbl_audio_info.setText("🔇 音訊: 已靜音")
+            return
+        src = self.config.get("audio_source", "system")
+        if src == "mic":
+            self.lbl_audio_info.setText("🎙 音訊: 實體麥克風 (自動偵測格式)")
+            return
+        dev_id = self.config.get("audio_output_device_id", "auto")
+        _, default_name, devices = list_system_audio_devices()
+        native_sr, native_ch = get_device_native_format(None if dev_id == "auto" else dev_id)
+        cfg_sr = int(self.config.get("audio_sample_rate", 0))
+        eff_sr = native_sr if cfg_sr <= 0 else cfg_sr
+        sr_str = f"{eff_sr/1000:.1f}kHz".replace(".0kHz", "kHz")
+        ch_str = "雙聲道" if (len(devices) > 1 and dev_id == "auto") or native_ch >= 2 else "單聲道"
+        fmt_tag = f"({sr_str}/{ch_str})"
+
+        if dev_id == "auto":
+            if len(devices) > 1:
+                target = f"監聽全部 {len(devices)} 個出口"
+                prefix = "全自動"
+            else:
+                target = default_name or "系統預設"
+                prefix = "全自動"
+        else:
+            matched = next((name for d_id, name in devices if d_id == dev_id), None)
+            if matched:
+                target = matched
+                prefix = "鎖定"
+            else:
+                target = f"{default_name or '系統預設'} (原指定裝置未連線)"
+                prefix = "回退"
+        src_tag = "+麥克風" if src == "mix" else ""
+        self.lbl_audio_info.setText(f"🔊 音訊{src_tag} [{prefix}]: {target} {fmt_tag}")
 
     def populate_record_modes(self):
         self.combo_mode.clear()
@@ -720,10 +821,13 @@ class MainWindow(QMainWindow):
         self.mini_lbl_status.setText("🔴 00:00:00")
         self.mini_lbl_status.setStyleSheet("color: #FF5252; min-width: 85px;")
 
+        self.update_audio_info_label()
+
         self.recorder_thread = ScreenRecorderThread(self.config)
         self.recorder_thread.duration_updated.connect(self.on_duration_update)
         self.recorder_thread.recording_stopped.connect(self.on_recording_stopped)
         self.recorder_thread.recording_error.connect(self.on_recording_error)
+        self.recorder_thread.audio_warning.connect(self.on_audio_warning)
         self.recorder_thread.start()
 
         # Minimize main window automatically if option is checked and not in mini mode
@@ -835,3 +939,6 @@ class MainWindow(QMainWindow):
         self.mini_lbl_status.setText("❌ 錯誤")
         self.mini_lbl_status.setStyleSheet("color: #F44336; min-width: 85px;")
         QMessageBox.critical(self, "錄影錯誤", err_msg)
+
+    def on_audio_warning(self, warn_msg):
+        QMessageBox.warning(self, "音訊錄製提醒", warn_msg)

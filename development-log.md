@@ -382,3 +382,108 @@
 - 執行 `git add .`。
 - 提交 Commit：`fix: resolve COM initialization error & support multi-screen mixed-DPI area selection`。
 - 執行 `git push origin main` 推送至 GitHub 遠端儲存庫。
+
+
+---
+
+## [2026-11-20 16:14:00] 任務：比對 GitHub 與本地端程式碼一致性 & 排查外接新電視顯示器時筆電喇叭未錄到聲音之原因
+
+### 1. 接收 User Prompt
+> 「請幫我看一下github內的code, 和本地端的code是否一致？並請檢查為何我前天接了一台新的電視當displayer, Notebook 上的speaker當聲音的撥放器，卻沒錄到聲音. why?」
+
+### 2. 調查與分析結果
+1. **GitHub 與本地端程式碼比對**：
+   - 執行 `git fetch origin` 後比對：
+     - 本地 `HEAD`：`0d7e4dc3f77099ce2aed27157d98ba434eda74b6`
+     - 遠端 `origin/main`：`0d7e4dc3f77099ce2aed27157d98ba434eda74b6`
+     - Ahead / Behind：`0 / 0`。
+   - 所有核心程式碼（`main.py`、`main_window.py`、`recorder.py`、`editor.py`、`area_selector.py`、`config.py`）與 GitHub **完全一致**，僅暫存測試腳本 `test_safe_command.py`（及日誌 `development-log.md`）有本地變更。
+2. **外接新電視當顯示器 + 筆電喇叭播放卻沒錄到聲音之根因排查**：
+   - **主因 1（系統預設音訊輸出裝置被 HDMI 電視搶走 / 與 App 播放裝置不一致）**：
+     - 接上 HDMI 電視時，Windows 預設會自動將系統「預設音訊輸出裝置 (Default Speaker)」切換至電視的 HDMI Audio。
+     - `recorder.py` 的 `get_system_loopback_mic()` 僅追蹤 `sc.default_speaker()`。若使用者是在瀏覽器/播放器或 Windows 音量混音程式中單獨指定用筆電喇叭出聲，但系統預設播放裝置仍停在電視 HDMI，程式就會去錄沒有聲音的電視 Loopback。
+   - **主因 2（`recorder.py` 裝置解析與錯誤處理漏洞）**：
+     - `get_system_loopback_mic()` 第 59 行以裝置名稱 `spk.name` 而非唯一端點 ID (`spk.id`) 匹配 Loopback 裝置；若比對失敗會落入 Fallback 盲選 `all_microphones(include_loopback=True)` 的**第一個** Loopback 裝置（接上電視後常會抓到電視 HDMI Audio）。
+     - `AudioCaptureThread.run()` 第 234 行 `except Exception as e: pass` 會靜默吞掉錄音執行緒內所有異常（如採樣率不支援、熱插拔導致 WASAPI 端點失效），使錄影靜默產出無聲檔案。
+   - **主因 3（主音量 0% 或靜音）**：
+     - WASAPI Post-Volume Loopback 在系統主音量為 0% 或靜音時波形全為 `0.0`，即使開啟 `auto_gain` 也無法反轉還原。
+
+### 3. 建議後續改善方案
+- 改以 `str(spk.id)` 精準匹配 WASAPI Loopback 端點。
+- 在「畫質/音訊設定」頁面增加「系統音訊裝置選擇」下拉選單（預設跟隨系統，亦可手動鎖定 `Speakers (Realtek(R) Audio)`），並在主畫面顯示當前實際抓取的音訊裝置名稱。
+- 移除 `AudioCaptureThread` 靜默 `except: pass`，加入錯誤回報與採樣率自動回退（44100Hz / 48000Hz）。
+
+
+---
+
+## [2026-11-20 16:24:00] 任務：實作 WASAPI 精準端點 ID 匹配、手動指定系統聲音裝置、採樣率自動容錯與無聲/異常提醒
+
+### 1. 接收 User Prompt
+> 「按你的意思修改code」
+
+### 2. 實施內容
+1. **設定持久化 (`config.py`)**：
+   - 於 `DEFAULT_CONFIG` 新增 `audio_output_device_id`（預設 `"auto"`，支援鎖定特定 Windows 播放裝置端點 ID）。
+2. **錄音核心升級 (`recorder.py`)**：
+   - 新增 `list_system_audio_devices()` 枚舉所有 Windows 播放裝置（ID + 名稱）。
+   - 重構 `get_system_loopback_mic(preferred_device_id="auto")`：改用 Windows 唯一端點 ID (`str(spk.id)`) 精準鎖定對應的 WASAPI Loopback，根絕名稱比對失敗導致盲抓電視 HDMI Audio 的問題。
+   - 升級 `get_windows_master_volume_scalar(device_id=None)`：透過 `IMMDeviceEnumerator::GetDevice` (vtable[5]) 查詢指定裝置的主音量，支援鎖定非預設裝置時仍正確進行 100% 音量反轉補償。
+   - 新增 `_open_recorder_with_fallback()`：當目標採樣率（如 44100Hz）或雙聲道遭驅動拒絕時，自動回退 48000Hz / 單聲道並同步回寫 `actual_sample_rate` 至 WAV 與 FFmpeg。
+   - 移除 `AudioCaptureThread` 靜默吞錯，改由 `ScreenRecorderThread.audio_warning` 訊號在發生錯誤或錄得全零靜音時即時提醒使用者。
+3. **介面增強 (`main_window.py`)**：
+   - 設定頁新增「裝置」下拉選單（支援 `🔄 自動跟隨系統預設` 或手動鎖定任一播放裝置）與 `🔄` 重新偵測按鈕。
+   - 錄影主頁新增 `🔊 音訊 [...]` 狀態列，錄影前即可一眼確認正在監聽哪個播放裝置。
+   - 串接 `audio_warning` 彈出「音訊錄製提醒」視窗。
+4. **整合驗證與重新打包**：
+   - 透過 `test_safe_command.py` 驗證端點 ID 解析、`GetDevice` 音量查詢、`AudioCaptureThread` 實機錄音與 `MainWindow` UI 整合，全數通過。
+   - 使用 PyInstaller 重新編譯最新 `dist\ScreenRecorder_Standalone.exe`。
+
+
+---
+
+## [2026-11-20 16:28:00] 任務：解答音訊輸出裝置、採樣率與聲道數之全自動偵測 (Auto-Detect) 技術可行性
+
+### 1. 接收 User Prompt
+> 「問一個問題，speaker出口和sampling freq/mono/stereo這些，就不能auto-detect嗎？」
+
+### 2. 技術分析與回覆重點
+- **Sampling Freq 與 Mono/Stereo**：可透過 Windows Core Audio `IAudioClient::GetMixFormat()` 100% 精準自動偵測裝置原生採樣率（44.1k/48k/96k）與聲道數（Mono/Stereo/多聲道），完全無須人工設定。
+- **Speaker 出口**：
+  - 可透過 Windows Core Audio `IAudioMeterInformation::GetPeakValue()` 偵測所有啟用中的播放裝置誰正在發聲（如同 Windows 音量混音器的即時音量條），自動挑選有聲音的出口。
+  - 若要連「先按錄影、幾秒後才按播放」的情境也 100% 不漏錄，可採用「多輸出裝置動態監測 / 自動切換」或「自動混音所有啟用中之系統輸出裝置」。
+
+
+---
+
+## [2026-11-20 16:36:30] 任務：實作全自動原生格式偵測 (GetMixFormat) 與方法 B 多出口同步監聽混音架構
+
+### 1. 接收 User Prompt
+> 「都直接加上, 而Speaker出口則採用B」
+
+### 2. 架構設計與實施
+1. **原生採樣率與 Mono/Stereo 自動偵測 (`recorder.py` & `config.py`)**：
+   - 實作 `get_device_native_format(device_id)`，透過純 ctypes 呼叫 Windows Core Audio `IAudioClient::GetMixFormat()`（vtable[8]）直接查詢硬體原生混音格式（如本機 Realtek 筆電喇叭原生為 `48000 Hz / 2 ch`），並將預設 `audio_sample_rate` 設為 `0`（全自動偵測）。
+   - 加入 `_normalize_channels()`，支援單聲道/雙聲道/多聲道自動對齊。
+2. **方法 B：全自動多 Speaker 出口同步擷取與無縫混音 (`recorder.py`)**：
+   - 新增 `get_all_system_loopback_mics()` 枚舉系統所有啟用中之播放裝置 Loopback（筆電喇叭、HDMI 電視、藍牙耳機、USB 音效卡等）。
+   - 實作輕量級每裝置獨立擷取執行緒 `_DeviceCaptureWorker`，各裝置各自執行獨立的 `get_windows_master_volume_scalar(device_id)` 100% 音量反轉補償（靜音裝置不放大、輸出嚴格為 `0.0`），並推入執行緒安全環形緩衝區 `deque(maxlen=32)`。
+   - 主音訊執行緒 `AudioCaptureThread` 以單調時鐘 (`time.perf_counter()`) 穩定節拍從所有活躍 Worker 取樣並加總混音：無論使用者先按錄影再按播放，或外接電視時聲音走筆電喇叭，或錄到一半切換耳機，皆可 100% 無縫錄製、零漏錄。
+3. **介面同步升級 (`main_window.py`)**：
+   - 採樣率下拉選單新增並預設 `🔄 自動偵測`（`userData=0`）。
+   - 裝置下拉選單自動模式更新為 `🔄 全自動多出口偵測 (同時監聽 N 個播放裝置)`，錄影主頁即時顯示自動偵測到的原生採樣率與聲道（如 `48kHz/雙聲道`）。
+4. **整合測試與重建 EXE**：
+   - 透過 `test_safe_command.py` 驗證 `GetMixFormat()`（偵測 `48000 Hz / 2 ch`）、單裝置自動錄音、方法 B 多 Worker 同步混音（system + mic）及 GUI 整合，全部通過。
+   - 重新以 PyInstaller 打包最新 `dist\ScreenRecorder_Standalone.exe`。
+
+
+---
+
+## [2026-11-20 16:38:30] 任務：將全自動音訊格式偵測與方法 B 多出口同步監聽混音更新推送至 GitHub
+
+### 1. 接收 User Prompt
+> 「git push 同步回 GitHub」
+
+### 2. 版本控制操作
+- 執行 `git add .` 暫存所有修改檔案（`config.py`、`recorder.py`、`main_window.py`、`development-log.md`、`test_safe_command.py`）。
+- 提交 Commit：`feat: auto-detect native audio format (GetMixFormat) & multi-output simultaneous loopback capture (Method B)`。
+- 執行 `git push origin main` 同步至 GitHub 遠端儲存庫。

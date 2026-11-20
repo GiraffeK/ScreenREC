@@ -15,18 +15,12 @@ def run_cmd(args):
         sys.exit(res.returncode)
     return res
 
-# 1. Stage all tracked and new files
 run_cmd(["git", "add", "."])
-
-# 2. Check status
 run_cmd(["git", "status", "--short"])
 
-# 3. Commit
-commit_msg = "fix: resolve COM initialization error & support multi-screen mixed-DPI area selection"
+commit_msg = "feat: auto-detect native audio format (GetMixFormat) & multi-output simultaneous loopback capture (Method B)"
 run_cmd(["git", "commit", "-m", commit_msg])
 
-# 4. Push to remote main
 print("Pushing to origin main...")
 run_cmd(["git", "push", "origin", "main"])
-
 print("Git push completed successfully!")

@@ -39,10 +39,11 @@ DEFAULT_CONFIG = {
     "fps": 30,
     "audio_enabled": True,
     "audio_source": "system",  # 'system' (WASAPI Loopback), 'mic', 'mix', 'mute'
+    "audio_output_device_id": "auto",  # 'auto' (follow Windows default) or specific speaker endpoint ID
     "audio_auto_gain": True,   # Automatically compensate Windows volume attenuation (100% full volume)
     "audio_codec": "aac",      # 'aac' or 'libmp3lame' (mp3)
     "audio_bitrate_kbps": 192, # 128, 192, 256, 320
-    "audio_sample_rate": 44100,
+    "audio_sample_rate": 0,    # 0 = auto-detect native device format (44100/48000/etc.)
     "record_mode": "fullscreen", # 'fullscreen' or 'region'
     "region_x": 100,
     "region_y": 100,
